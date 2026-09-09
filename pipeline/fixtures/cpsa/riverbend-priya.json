@@ -1,0 +1,17 @@
+{
+  "license_number": "CPSA-1003",
+  "full_name": "Priya Nair",
+  "first_name": "Priya",
+  "last_name": "Nair",
+  "credentials": "MD",
+  "specialty": "Pediatrics",
+  "title": null,
+  "license_status": "active",
+  "practice_name": "Riverbend Family Clinic",
+  "address_line1": "100 Example Street",
+  "city": "Edmonton",
+  "province": "AB",
+  "postal_code": "T5J 0A1",
+  "country": "CA",
+  "practice_type_hint": "clinic"
+}
