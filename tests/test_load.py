@@ -20,6 +20,7 @@ def test_schema_defines_v1_tables():
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
     assert "UNIQUE (source, listing_type, practitioner_key)" in sql
     assert "email text" in sql
+    assert "fax text" in sql
     assert "enrichment_status" in sql
 
 
@@ -122,11 +123,17 @@ def test_fixture_transform_medical(tmp_path):
 
     hilary = next(contact for contact in batch.contacts if contact.full_name == "Aadland, Hilary")
     assert hilary.specialty == "Psychiatry"
+    assert hilary.phone == "403-956-1156"
     mooney = next(
         row for row in batch.practitioners
         if row.listing_type == "specialists" and "Mooney" in row.full_name
     )
     assert mooney.specialty == "Adolescent Medicine"
+    assert mooney.phone == "403-955-2978"
+    assert mooney.fax == "403-955-7649"
+    mooney_contact = next(contact for contact in batch.contacts if "Mooney" in contact.full_name)
+    assert mooney_contact.phone == "403-955-2978"
+    assert mooney_contact.fax == "403-955-7649"
 
 
 def test_enrichment_stub_is_blocked():

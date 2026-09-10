@@ -136,9 +136,10 @@ def upsert_contact(conn: Connection, contact: Contact, organization_id: UUID | N
         """
         INSERT INTO contacts (
             contact_key, organization_id, first_name, last_name, full_name, title,
-            credentials, specialty, license_number, license_college, enrichment_status
+            credentials, specialty, license_number, license_college, phone, fax,
+            enrichment_status
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'blocked')
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'blocked')
         ON CONFLICT (contact_key) DO UPDATE SET
             organization_id = EXCLUDED.organization_id,
             first_name = EXCLUDED.first_name,
@@ -149,6 +150,8 @@ def upsert_contact(conn: Connection, contact: Contact, organization_id: UUID | N
             specialty = EXCLUDED.specialty,
             license_number = EXCLUDED.license_number,
             license_college = EXCLUDED.license_college,
+            phone = EXCLUDED.phone,
+            fax = EXCLUDED.fax,
             updated_at = now()
         RETURNING id
         """,
@@ -163,6 +166,8 @@ def upsert_contact(conn: Connection, contact: Contact, organization_id: UUID | N
             contact.specialty,
             contact.license_number,
             contact.license_college,
+            contact.phone,
+            contact.fax,
         ),
     ).fetchone()
     return row[0]
@@ -174,9 +179,10 @@ def upsert_practitioner(conn: Connection, practitioner: Practitioner) -> UUID:
         INSERT INTO practitioners (
             practitioner_key, source, listing_type, full_name, profession,
             licence_status, specialty, practice_name, practice_address,
+            city, postal_code, phone, fax,
             source_reference, collection_method, collected_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
         ON CONFLICT (source, listing_type, practitioner_key) DO UPDATE SET
             full_name = EXCLUDED.full_name,
             profession = EXCLUDED.profession,
@@ -184,6 +190,10 @@ def upsert_practitioner(conn: Connection, practitioner: Practitioner) -> UUID:
             specialty = EXCLUDED.specialty,
             practice_name = EXCLUDED.practice_name,
             practice_address = EXCLUDED.practice_address,
+            city = EXCLUDED.city,
+            postal_code = EXCLUDED.postal_code,
+            phone = EXCLUDED.phone,
+            fax = EXCLUDED.fax,
             source_reference = EXCLUDED.source_reference,
             collection_method = EXCLUDED.collection_method,
             collected_at = EXCLUDED.collected_at,
@@ -200,6 +210,10 @@ def upsert_practitioner(conn: Connection, practitioner: Practitioner) -> UUID:
             practitioner.specialty,
             practitioner.practice_name,
             practitioner.practice_address,
+            practitioner.city,
+            practitioner.postal_code,
+            practitioner.phone,
+            practitioner.fax,
             practitioner.source_reference,
             practitioner.collection_method,
             practitioner.collected_at,

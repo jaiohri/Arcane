@@ -129,7 +129,13 @@ def run_transform(run_dir: Path, config: SegmentConfig) -> TransformBatch:
                     license_number=record.license_number,
                     license_college=record.license_college,
                     license_status=record.license_status,
+                    phone=record.phone,
+                    fax=record.fax,
                     display_org_key=display_org,
+                )
+            else:
+                _fill_contact_from_listing(
+                    contacts[person_key], record, listing.listing_type
                 )
 
     seen_members: set[tuple[str, str]] = set()
@@ -212,3 +218,14 @@ def _attach_profcorp_owners(
             )
             licensee_groups[org.org_key].add(person_key)
             keyed_members.append((org.org_key, person_key, owner))
+
+
+def _fill_contact_from_listing(
+    contact: Contact, record: InternedRecord, listing_type: str
+) -> None:
+    """Prefer specialists / non-specialists phone and fax over alphabetical."""
+    prefer = listing_type in PROMOTE_ORGS
+    if record.phone and (prefer or not contact.phone):
+        contact.phone = record.phone
+    if record.fax and (prefer or not contact.fax):
+        contact.fax = record.fax

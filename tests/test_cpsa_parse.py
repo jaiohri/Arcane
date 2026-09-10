@@ -102,6 +102,29 @@ def test_specialists_keep_section_header_as_specialty():
     assert mooney.address_line1 is None or "Adolescent Medicine" not in mooney.address_line1
 
 
+def test_specialists_keep_every_pdf_column():
+    text = (FIXTURES_DIR / "cpsa" / "listings" / "specialists.txt").read_text()
+    parsed = parse_listing_text("specialists", text)
+    mooney = next(row for row in parsed.practitioners if "Mooney" in row.full_name)
+    assert mooney.practice_address == "28 Oki Drive Northwest"
+    assert mooney.city == "Calgary"
+    assert mooney.postal_code == "T3B 6A8"
+    assert mooney.phone == "403-955-2978"
+    assert mooney.fax == "403-955-7649"
+    adam = next(row for row in parsed.practitioners if "Adam, Benjamin" in row.full_name)
+    assert adam.phone == "780-407-8822"
+    assert adam.fax is None
+
+
+def test_alphabetical_keeps_phone():
+    text = (FIXTURES_DIR / "cpsa" / "listings" / "alphabetical.txt").read_text()
+    parsed = parse_listing_text("alphabetical", text)
+    hilary = next(row for row in parsed.practitioners if "Aadland" in row.full_name)
+    assert hilary.city == "Calgary"
+    assert hilary.phone == "403-956-1156"
+    assert hilary.fax is None
+
+
 def test_two_column_alphabetical_line_splits_into_two_people():
     text = (
         "Aadland, Hilary Calgary 403-956-1156 PSY "

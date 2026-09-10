@@ -30,6 +30,8 @@ class InternedRecord:
     listing_type: str | None = None
     source_reference: str | None = None
     collection_method: str | None = "bulk_pdf"
+    phone: str | None = None
+    fax: str | None = None
     raw_payload: dict[str, Any] = field(default_factory=dict)
 
 
@@ -44,8 +46,12 @@ class Practitioner:
     specialty: str | None
     practice_name: str | None
     practice_address: str | None
-    source_reference: str | None
-    collection_method: str
+    city: str | None = None
+    postal_code: str | None = None
+    phone: str | None = None
+    fax: str | None = None
+    source_reference: str | None = None
+    collection_method: str = "bulk_pdf"
     collected_at: datetime | None = None
 
 
@@ -78,6 +84,8 @@ class Contact:
     license_number: str | None
     license_college: str
     license_status: str | None
+    phone: str | None = None
+    fax: str | None = None
     display_org_key: str | None = None
 
 

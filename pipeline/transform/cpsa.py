@@ -126,6 +126,23 @@ def _is_specialty_token(token: str) -> bool:
     return bool(SPECIALTY_TOKEN_RE.match(stripped))
 
 
+def _split_phone_fax(
+    phones: list[str], fax_raw: str | None = None
+) -> tuple[str | None, str | None]:
+    """PHONE column first; FAX column if present; else a second number on the line is fax."""
+    phone = phones[0] if phones else None
+    fax_hits = PHONE_RE.findall(fax_raw or "")
+    if fax_hits:
+        fax = fax_hits[0]
+    elif fax_raw and fax_raw.strip():
+        fax = fax_raw.strip()
+    elif len(phones) > 1:
+        fax = phones[1]
+    else:
+        fax = None
+    return phone, fax
+
+
 def _person(
     *,
     listing: CpsaListing,
@@ -138,6 +155,8 @@ def _person(
     postal_code: str | None = None,
     practice_name: str | None = None,
     license_number: str | None = None,
+    phone: str | None = None,
+    fax: str | None = None,
     extra: dict | None = None,
 ) -> tuple[Practitioner, InternedRecord]:
     display = full_name.strip()
@@ -157,6 +176,10 @@ def _person(
         specialty=specialty,
         practice_name=practice_name,
         practice_address=address,
+        city=city,
+        postal_code=postal_code,
+        phone=phone,
+        fax=fax,
         source_reference=license_number,
         collection_method="bulk_pdf",
     )
@@ -182,6 +205,8 @@ def _person(
         listing_type=listing.listing_type,
         source_reference=license_number,
         collection_method="bulk_pdf",
+        phone=phone,
+        fax=fax,
         raw_payload=extra or {},
     )
     return practitioner, record
@@ -351,6 +376,7 @@ def parse_alphabetical(text: str, listing: CpsaListing) -> ListingParse:
         full_name = f"{last_name}, {first_name}".strip() if last_name else chunk
         if _is_junk_person_name(full_name):
             continue
+        phone, fax = _split_phone_fax(phones)
         practitioner, record = _person(
             listing=listing,
             last_name=last_name,
@@ -358,7 +384,8 @@ def parse_alphabetical(text: str, listing: CpsaListing) -> ListingParse:
             full_name=full_name,
             city=city,
             specialty=expand_specialty_codes(specialty_raw) or specialty_raw,
-            extra={"phones_in_source": phones},
+            phone=phone,
+            fax=fax,
         )
         practitioners.append(practitioner)
         records.append(record)
@@ -405,6 +432,7 @@ def parse_address_listing(text: str, listing: CpsaListing) -> ListingParse:
         if current_specialty and address and address.endswith(current_specialty):
             address = address[: -len(current_specialty)].strip() or None
         last_name, first_name, _ = split_name(full_name)
+        phone, fax = _split_phone_fax(phones)
         practitioner, record = _person(
             listing=listing,
             last_name=last_name,
@@ -414,7 +442,8 @@ def parse_address_listing(text: str, listing: CpsaListing) -> ListingParse:
             specialty=current_specialty,
             address=address,
             postal_code=postal,
-            extra={"phones_in_source": phones},
+            phone=phone,
+            fax=fax,
         )
         practitioners.append(practitioner)
         records.append(record)
@@ -502,7 +531,10 @@ def _row_person(
     address = (row.get("address") or "").strip() or None
     postal = (row.get("postal") or "").strip() or None
     specialty_raw = (row.get("specialty") or "").strip() or None
-    phones = PHONE_RE.findall(row.get("phone") or "")
+    phone, fax = _split_phone_fax(
+        PHONE_RE.findall(row.get("phone") or ""),
+        row.get("fax"),
+    )
     return _person(
         listing=listing,
         last_name=last_name,
@@ -512,7 +544,8 @@ def _row_person(
         specialty=expand_specialty_codes(specialty_raw) or specialty_raw,
         address=address,
         postal_code=postal,
-        extra={"phones_in_source": phones, "fax": row.get("fax")},
+        phone=phone,
+        fax=fax,
     )
 
 

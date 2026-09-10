@@ -199,8 +199,8 @@ CPSA does not offer an API or bulk database export. The live adapter downloads t
 | `listing_type` | File | Grain | Default `licence_status` |
 | --- | --- | --- | --- |
 | `alphabetical` | `Alphabetical Listing.pdf` | Person (name, city, phone, specialty) | `active` |
-| `specialists` | `Specialty Listing.pdf` | Person (name, address, city, postal, specialty section) | `active` |
-| `non_specialists` | `Non Specialty Listing.pdf` | Person at an address when present | `active` |
+| `specialists` | `Specialty Listing.pdf` | Person (name, address, city, postal, phone, fax; specialty from section header) | `active` |
+| `non_specialists` | `Non Specialty Listing.pdf` | Person (name, address, city, postal, phone, fax) | `active` |
 | `retired` | `Retired Listing.pdf` | Person | `retired` |
 | `obituaries` | `Obituaries Listing.pdf` | Person | `deceased` |
 | `professional_corporations` | `ProfCorp Listing.pdf` | Organization (corporation legal name only) | n/a |
@@ -209,7 +209,9 @@ A symbols-and-abbreviations key is parsed once and hardcoded in `pipeline/extrac
 
 Live CPSA PDFs are landscape and **multi-column**. Default left-to-right text extraction glues two people onto one line. Extract uses word x-positions (`pipeline/extract/cpsa_pdf.py`) so each column is read top-to-bottom. Transform prefers that PDF path when the file is a directory-sized landscape PDF and rewrites the inspectable `.txt` next to it. Fixture PDFs stay portrait and are parsed from text.
 
-Phone numbers that appear in the PDFs stay in the raw text landing. They are **not** copied onto `contacts.phone`.
+Every printed PDF column is stored on `practitioners` for that listing. Alphabetical has no address or fax; retired / obituaries have name and city only; ProfCorp is a corporation name only.
+
+Phone and fax from the listings are copied onto `contacts.phone` / `contacts.fax` (specialists / non-specialists win over alphabetical when both exist). Email stays null until enrichment exists.
 
 Specialty:
 
@@ -314,7 +316,7 @@ CPSA/CDSA will usually **not** give title = Owner, headcount, or founded year. T
 - Default title to the credential (`Physician`, `Dentist`) when the source has no owner flag
 - Set title to `Owner` only when a unique ProfCorp name match exists
 - Use **co-located licensee count** at the same organization key as a headcount proxy
-- Do not invent emails or phones; leave them null until enrichment exists. CPSA PDF phone columns stay in raw text only.
+- Copy CPSA PDF phone and fax onto practitioners and contacts; do not invent emails. `contacts.email` stays null until enrichment exists.
 
 Presentation can still filter on city, specialty, and score. Backend extract does not pretend to know employee_count.
 
@@ -339,7 +341,11 @@ CPSA landing / staging grain. One row per person × listing. ProfCorp does not w
 | `licence_status` | text | `active` \| `retired` \| `deceased` \| listing codes |
 | `specialty` | text null | Alphabetical codes (expanded when known); specialists section title |
 | `practice_name` | text null | When the listing provides one |
-| `practice_address` | text null | Unstructured address when present |
+| `practice_address` | text null | ADDRESS column when present |
+| `city` | text null | CITY column |
+| `postal_code` | text null | POSTAL column |
+| `phone` | text null | PHONE column |
+| `fax` | text null | FAX column (specialists / non-specialists) |
 | `source_reference` | text null | Registration number if present |
 | `collection_method` | text | `bulk_pdf` |
 | `collected_at` | timestamptz | Producing run |
@@ -385,12 +391,13 @@ Unique `(source, listing_type, practitioner_key)`.
 | `license_number` | text null | |
 | `license_college` | text | `CPSA` \| `CDSA` |
 | `email` | text null | Always null in v1 |
-| `phone` | text null | Always null in v1 |
+| `phone` | text null | From CPSA PHONE column; specialists / non-specialists over alphabetical |
+| `fax` | text null | From CPSA FAX column when present |
 | `enriched_at` | timestamptz null | |
 | `enrichment_status` | text | `none` \| `blocked` \| `ok` \| `failed` — v1 is `blocked` |
 | `created_at` / `updated_at` | timestamptz | |
 
-Email and phone stay null by design until enrichment is authorized.
+Email stays null by design until enrichment is authorized. Phone and fax come from the registry PDFs.
 
 ### 8.4 `segments`
 
@@ -618,7 +625,7 @@ Default saved question / app:
 
 - From `segment_members` where `is_primary_contact`
 - Join organization and contact
-- Columns: name, credentials, practice, city, licensee_count, practice_type, fit_score, specialty, segment
+- Columns: name, credentials, practice, city, phone, fax, licensee_count, practice_type, fit_score, specialty, segment
 - Filters: `segment_id`, `city`, `sector`, `fit_score >= n`, `practice_type`
 - Sort: `fit_score` desc
 - Export: CSV
