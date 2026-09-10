@@ -1,0 +1,17 @@
+{
+  "license_number": "CPSA-1002",
+  "full_name": "Omar Haddad",
+  "first_name": "Omar",
+  "last_name": "Haddad",
+  "credentials": "MD",
+  "specialty": "Family Medicine",
+  "title": null,
+  "license_status": "active",
+  "practice_name": "Riverbend Family Clinic",
+  "address_line1": "100 Example Street",
+  "city": "Edmonton",
+  "province": "AB",
+  "postal_code": "T5J 0A1",
+  "country": "CA",
+  "practice_type_hint": "clinic"
+}

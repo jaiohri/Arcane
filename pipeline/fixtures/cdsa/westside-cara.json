@@ -1,0 +1,17 @@
+{
+  "license_number": "CDSA-5003",
+  "full_name": "Cara Nguyen",
+  "first_name": "Cara",
+  "last_name": "Nguyen",
+  "credentials": "DDS",
+  "specialty": "Orthodontics",
+  "title": null,
+  "license_status": "active",
+  "practice_name": "Westside Family Dental",
+  "address_line1": "200 17 Avenue SW",
+  "city": "Calgary",
+  "province": "AB",
+  "postal_code": "T2S 0A1",
+  "country": "CA",
+  "practice_type_hint": "clinic"
+}

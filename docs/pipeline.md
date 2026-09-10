@@ -405,7 +405,7 @@ Always persist the math, for example:
 ```json
 {
   "version": 1,
-  "total": 78,
+  "total": 88,
   "signals": {
     "market": 15,
     "practice_type": 25,

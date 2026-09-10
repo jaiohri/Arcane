@@ -1,0 +1,28 @@
+segment_id: alberta-dental-benefits
+display_name: Alberta dental practice owners (group benefits)
+province: AB
+country: CA
+profession: dentist
+industries:
+  - Dentists
+source:
+  adapter: cdsa
+  tos_status: unchecked   # unchecked | allowed | prohibited
+  tos_notes: ""
+target:
+  headcount_min: 5
+  headcount_max: 50
+  decision_maker_titles:
+    - Owner
+    - Practice Owner
+    - Founder
+    - Managing Partner
+  credential_tokens:
+    - Dentist
+    - DDS
+    - DMD
+extract:
+  enabled: false           # stay false until tos_status is allowed
+  rate_limit_rps: 0.2
+score:
+  version: 1

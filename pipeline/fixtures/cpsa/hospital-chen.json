@@ -1,0 +1,17 @@
+{
+  "license_number": "CPSA-3001",
+  "full_name": "Chen Wei",
+  "first_name": "Chen",
+  "last_name": "Wei",
+  "credentials": "MD",
+  "specialty": "Internal Medicine",
+  "title": null,
+  "license_status": "active",
+  "practice_name": "University of Alberta Hospital",
+  "address_line1": "8440 112 Street NW",
+  "city": "Edmonton",
+  "province": "AB",
+  "postal_code": "T6G 2B7",
+  "country": "CA",
+  "practice_type_hint": "hospital"
+}
