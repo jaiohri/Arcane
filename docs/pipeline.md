@@ -96,14 +96,16 @@ The pipeline may land **prospect lists**. It does not authorize outreach.
                                       ▼
                     ┌─────────────────────────────────────┐
                     │  LOAD                                │
-                    │  upsert orgs, contacts, memberships   │
+                    │  upsert practitioners, orgs,         │
+                    │  contacts, memberships               │
                     └─────────────────┬───────────────────┘
                                       │
                                       ▼
                     ┌─────────────────────────────────────┐
                     │  POSTGRES                            │
-                    │  organizations, contacts,           │
-                    │  segments, segment_members, runs    │
+                    │  practitioners, organizations,      │
+                    │  contacts, segments,                │
+                    │  segment_members, runs              │
                     └─────────────────┬───────────────────┘
                                       │ read only
                                       ▼
@@ -187,21 +189,37 @@ score:
 
 | Adapter | Registry | What it gives | What it does not give |
 | --- | --- | --- | --- |
-| `cpsa` | CPSA Physician Directory | Licensed physician name, practice location, often specialty / status | Headcount, revenue, email, phone, owner tenure, founded year |
-| `cdsa` | CDSA Dentist Directory / Alberta Dental Association Find a Dentist | Licensed dentist name, practice location | Same gaps |
+| `cpsa` | CPSA Medical Directory PDFs (six listings, updated daily) | Licensed physician name, city, often specialty / status; address on some listings; professional corporation names | Headcount, revenue, owner tenure, founded year; registration number is often absent from the PDFs; email |
+| `cdsa` | CDSA Dentist Directory / Alberta Dental Association Find a Dentist | Licensed dentist name, practice location | Same gaps; no bulk PDF. Fixture-mode is empty until a later task |
+
+CPSA does not offer an API or bulk database export. The live adapter downloads text-based PDFs with `pdfplumber` (no OCR) from predictable URLs under `https://cpsa.ca/MedicalDirectory/`:
+
+| `listing_type` | File | Grain | Default `licence_status` |
+| --- | --- | --- | --- |
+| `alphabetical` | `Alphabetical Listing.pdf` | Person (name, city, phone, specialty) | `active` |
+| `specialists` | `Specialty Listing.pdf` | Person (name, address, city, postal, specialty section) | `active` |
+| `non_specialists` | `Non Specialty Listing.pdf` | Person at an address when present | `active` |
+| `retired` | `Retired Listing.pdf` | Person | `retired` |
+| `obituaries` | `Obituaries Listing.pdf` | Person | `deceased` |
+| `professional_corporations` | `ProfCorp Listing.pdf` | Organization (corporation legal name only) | n/a |
+
+A symbols-and-abbreviations key is parsed once and hardcoded in the repo. It is not re-fetched on each run.
+
+Phone numbers that appear in the PDFs stay in the raw text landing. They are **not** copied onto `contacts.phone`.
 
 Properties of these sources:
 
-- Public, free, typically updated daily
-- Built as HTML search UIs, not bulk export APIs
-- Identity gold field: **license / registration number** when present; otherwise name + college + practice address
+- Public, free; CPSA listings page states they are updated daily
+- CPSA bulk path is PDFs, not the HTML Physician Directory search UI
+- Identity gold field: **license / registration number** when present; otherwise `(listing_type, normalized name, city)` for people and normalized corporation name for ProfCorp
+- CDSA still has no equivalent bulk file; do not scrape its search tool in this build
 - Every province (and most other regulated professions) has an analogue. Check that before assuming Apollo is required for a new vertical
 
-**Legal gate:** treat each registry as a separate ToS review. Do not implement a live adapter against a source whose `tos_status` is `unchecked` or `prohibited`.
+**Legal gate:** treat each registry as a separate ToS review. Do not hit the network against a source whose `tos_status` is `unchecked` or `prohibited`.
 
 Until that review is done, extract has two allowed modes:
 
-1. **Fixture mode** — load checked-in sample HTML/JSON under `pipeline/fixtures/` so transform, scoring, and load can be built and tested.
+1. **Fixture mode** — load checked-in sample files under `pipeline/fixtures/` so transform, scoring, and load can be built and tested.
 2. **Manual drop mode** — an operator places exported files into `data/raw/{segment}/{run_id}/` and the job starts at transform.
 
 ### 6.2 Secondary: Apollo.io (blocked)
@@ -220,15 +238,30 @@ When (if) a reseller agreement exists, enrichment is a separate module. It write
 
 ## 7. Entity model
 
-College rows are **people at places**. The buyer for group benefits is the **practice**, not the individual license.
+College rows are **people at places**, except CPSA Professional Corporations, which are legal entities. The buyer for group benefits is the **practice**, not the individual license.
 
 | Entity | Grain | Example |
 | --- | --- | --- |
-| Organization | A practice location (clinic / office) | "Westside Family Dental, Calgary" |
-| Contact | A licensed practitioner, preferably the owner | "Jane Chen, DDS" |
-| Segment member | Contact at an organization, produced by a named segment | Jane Chen in `alberta-dental-benefits` |
+| Practitioner | One person as they appear in one CPSA listing (staging) | "Hilary Aadland" from `alphabetical` |
+| Organization | A practice location, or a CPSA professional corporation | "A. Ahmed Professional Corporation" |
+| Contact | A licensed practitioner | "Hilary Aadland, MD" |
+| Segment member | Contact at an organization, produced by a named segment | Only when a real practice org exists |
+
+CPSA promotion rules (do not fuzzy-match ProfCorp names to people in this version):
+
+| Listing | `practitioners` | `contacts` | `organizations` | `segment_members` |
+| --- | --- | --- | --- | --- |
+| Alphabetical / Specialists | yes, status `active` | yes | no (city is not a practice) | no |
+| Non-Specialists | yes | yes | yes only if a practice/address is present | only with that org |
+| Retired / Obituaries | yes, status `retired` / `deceased` | yes | no | no |
+| ProfCorp | no person row | no | yes, corp name as org | no |
 
 ### Identity
+
+**Practitioner key** (in order):
+
+1. Registration / license number, if the listing provides one
+2. `(listing_type, normalized full_name, city)`
 
 **Organization key** (in order):
 
@@ -238,7 +271,10 @@ College rows are **people at places**. The buyer for group benefits is the **pra
 **Contact key** (in order):
 
 1. `(college, license_number)` — stable across runs
-2. Normalized `(full_name, college, organization_key)`
+2. Normalized `(full_name, college, organization_key)` when an org exists
+3. Normalized `(full_name, college, city)` when the person has no practice org
+
+Unique practitioners are `(source, listing_type, practitioner_key)`, so the same physician may appear once per listing. Re-runs upsert; they must not duplicate because of PDF row order.
 
 A practitioner at two clinics becomes **one contact, two memberships** (or two org links). Do not duplicate the person. A clinic with several dentists is **one organization, many contacts**. Prefer ranking the owner / managing partner as the primary contact for the list; keep other practitioners as secondary members so the org is not lost if title is missing.
 
@@ -250,7 +286,7 @@ CPSA/CDSA will usually **not** give title = Owner, headcount, or founded year. T
 
 - Default title to the credential (`Physician`, `Dentist`) when the source has no owner flag
 - Use **co-located licensee count** at the same organization key as a headcount proxy
-- Do not invent emails or phones; leave them null until enrichment exists
+- Do not invent emails or phones; leave them null until enrichment exists. CPSA PDF phone columns stay in raw text only.
 
 Presentation can still filter on city, specialty, and score. Backend extract does not pretend to know employee_count.
 
@@ -260,7 +296,29 @@ Presentation can still filter on city, specialty, and score. Backend extract doe
 
 Relational on purpose: the pilot need is tabular filter/sort/export, not document flexibility.
 
-### 8.1 `organizations`
+### 8.1 `practitioners`
+
+CPSA landing / staging grain. One row per person × listing. ProfCorp does not write here.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid pk | Internal |
+| `practitioner_key` | text | Deterministic identity within a listing |
+| `source` | text | `cpsa` |
+| `listing_type` | text | One of the six PDF ids |
+| `full_name` | text | |
+| `profession` | text | `physician` for all CPSA rows |
+| `licence_status` | text | `active` \| `retired` \| `deceased` \| listing codes |
+| `practice_name` | text null | When the listing provides one |
+| `practice_address` | text null | Unstructured address when present |
+| `source_reference` | text null | Registration number if present |
+| `collection_method` | text | `bulk_pdf` |
+| `collected_at` | timestamptz | Producing run |
+| `created_at` / `updated_at` | timestamptz | |
+
+Unique `(source, listing_type, practitioner_key)`.
+
+### 8.2 `organizations`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -282,13 +340,13 @@ Relational on purpose: the pilot need is tabular filter/sort/export, not documen
 | `source_org_id` | text null | If the registry exposes one |
 | `created_at` / `updated_at` | timestamptz | |
 
-### 8.2 `contacts`
+### 8.3 `contacts`
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | uuid pk | |
 | `contact_key` | text unique | Deterministic identity key |
-| `organization_id` | uuid fk | Primary / current practice for display; membership table is source of truth for many-to-many |
+| `organization_id` | uuid fk null | Primary / current practice for display when one exists; null for people-only listings |
 | `first_name` | text | |
 | `last_name` | text | |
 | `full_name` | text | |
@@ -305,7 +363,7 @@ Relational on purpose: the pilot need is tabular filter/sort/export, not documen
 
 Email and phone stay null by design until enrichment is authorized.
 
-### 8.3 `segments`
+### 8.4 `segments`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -316,7 +374,7 @@ Email and phone stay null by design until enrichment is authorized.
 | `config_hash` | text | Hash of the YAML used for the last successful load |
 | `created_at` / `updated_at` | timestamptz | |
 
-### 8.4 `segment_members`
+### 8.5 `segment_members`
 
 The list the advisor actually uses. One row per contact × organization × segment.
 
@@ -336,7 +394,7 @@ The list the advisor actually uses. One row per contact × organization × segme
 
 Unique `(segment_id, organization_id, contact_id)`.
 
-### 8.5 `etl_runs`
+### 8.6 `etl_runs`
 
 | Column | Type | Notes |
 | --- | --- | --- |
@@ -345,11 +403,11 @@ Unique `(segment_id, organization_id, contact_id)`.
 | `phase` | text | `extract` \| `transform` \| `load` \| `full` |
 | `status` | text | `started` \| `succeeded` \| `failed` \| `skipped_legal_gate` |
 | `started_at` / `finished_at` | timestamptz | |
-| `row_counts` | jsonb | `{raw, orgs, contacts, members}` |
+| `row_counts` | jsonb | `{raw, practitioners, orgs, contacts, members}` |
 | `git_sha` | text null | |
 | `error` | text null | |
 
-### 8.6 What is not a table in v1
+### 8.7 What is not a table in v1
 
 - No `enrichment_jobs` queue until Apollo is authorized
 - No outreach / CASL consent tables
@@ -363,12 +421,12 @@ Transform is the only place business logic lives. Extract does not score. Load d
 
 Pipeline:
 
-1. Read raw files for `run_id`
-2. Parse to a source-specific interned record
-3. Map to canonical organization + contact
+1. Read raw files for `run_id` (CPSA: `{listing}.txt`, or `{listing}.pdf` if text is missing)
+2. Parse each listing with its own layout parser; a failure on one listing must not block the others
+3. Map to `practitioners` plus interned people / ProfCorp orgs
 4. Resolve identity (upsert keys)
-5. Compute `licensee_count` and `practice_type` per organization
-6. Score each candidate membership
+5. Compute `licensee_count` and `practice_type` per organization that exists
+6. Score each candidate membership (only contact × org pairs)
 7. Mark `is_primary_contact`
 8. Emit load batches
 
@@ -457,11 +515,12 @@ Phases: `extract` | `transform` | `load` | `full`.
 ```text
 data/raw/{segment_id}/{run_id}/
   manifest.json
-  pages/...          # or source files as retrieved
-  responses/...      # verbatim HTTP/HTML/JSON
+  pages/{listing_type}.pdf
+  pages/{listing_type}.txt    # pdfplumber extract; inspectable after transform
+  responses/...               # unused for CPSA PDFs
 ```
 
-`manifest.json` records segment_id, adapter, started_at, tos_status, file list, and whether the run used fixtures. Raw files are not committed except `pipeline/fixtures/`.
+`manifest.json` records segment_id, adapter, started_at, tos_status, file list, per-listing success/failure, and whether the run used fixtures. Raw files are not committed except `pipeline/fixtures/`.
 
 `data/` is gitignored. Fixtures are small, redacted, and sufficient to unit-test parse/score/load.
 
@@ -480,9 +539,10 @@ No shared HTML scraper framework that is then pointed at a new college by URL on
 
 ### 10.4 Load semantics
 
+- Upsert `practitioners` on `(source, listing_type, practitioner_key)`
 - Upsert organizations on `org_key`
 - Upsert contacts on `contact_key`
-- Upsert `segment_members` on `(segment_id, organization_id, contact_id)`
+- Upsert `segment_members` on `(segment_id, organization_id, contact_id)` only when both sides exist
 - Refresh `fit_score`, `score_breakdown`, `last_seen_at` on each successful transform
 - Do not delete members that disappeared from a run in v1; keep `last_seen_at` so a later job can mark inactive. Hard delete is a later policy.
 
@@ -540,10 +600,13 @@ pipeline/
     runner.py
     adapters/
       base.py
-      cpsa.py                    # gated; fixtures until ToS allows
-      cdsa.py
+      cpsa.py                    # live PDF download when segment extract is allowed
+      cdsa.py                    # gated stub; no fixtures yet
+    cpsa_listings.py
+    cpsa_symbols.py
   transform/
     parse.py
+    cpsa.py                      # per-listing PDF/text parsers
     identity.py
     score.py
     normalize.py
@@ -553,12 +616,13 @@ pipeline/
   enrichment/
     stub.py                      # always blocked in v1
   fixtures/
-    cpsa/
-    cdsa/
+    cpsa/listings/               # synthetic text/PDF slices, all six listings
+    cdsa/                        # empty until a later dentist task
 tests/
   test_identity.py
   test_score.py
   test_load.py
+  test_cpsa_parse.py
 data/                            # gitignored raw landing
 ```
 
@@ -616,13 +680,13 @@ Build in this order so scoring and schema are real before any network adapter ex
 
 1. Postgres schema + local/Neon connection
 2. Segment YAML for the two Alberta segments, extract disabled
-3. Fixtures (small, synthetic or redacted directory pages)
-4. Transform: parse, identity, licensee_count, score v1
+3. Fixtures (small, synthetic CPSA PDF/text slices for all six listings)
+4. Transform: per-listing parse, practitioners staging, identity, licensee_count, score v1
 5. Load upserts + `etl_runs`
 6. Metabase/Retool read-only view on `segment_members`
-7. Tests for identity collisions, size bands, hospital penalty, gated extract
-8. **Stop for ToS review**
-9. Only then: live adapters, rate limits, GitHub Action schedule
+7. Tests for identity collisions, size bands, hospital penalty, gated extract, listing isolation
+8. **CPSA ToS review** — still required before `extract.enabled: true`
+9. GitHub Action schedule (optional); CDSA still gated
 10. Apollo / enrichment: only after a reseller agreement, as a separate change
 
 ---
@@ -633,7 +697,9 @@ Resolved by this document unless explicitly revisited:
 
 - Postgres not Mongo
 - Segment = extract unit, not a presentation filter
-- Org = practice location; contact = licensee; list = primary `segment_members`
+- Org = practice location or CPSA professional corporation; contact = licensee; list = primary `segment_members`
+- CPSA ProfCorp is an organization listing; it is not fuzzy-matched to physicians in this version
+- CPSA `practitioners` is staging; city-only listings do not become organizations
 - Score v1 uses licensee count as size proxy; does not require Apollo
 - Enrichment is on-demand and blocked
 - Pilot UI is BI, not a custom app
