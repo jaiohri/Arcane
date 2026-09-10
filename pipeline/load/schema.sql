@@ -1,5 +1,24 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+CREATE TABLE IF NOT EXISTS practitioners (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    practitioner_key text NOT NULL,
+    source text NOT NULL,
+    listing_type text NOT NULL,
+    full_name text NOT NULL,
+    profession text NOT NULL,
+    licence_status text,
+    specialty text,
+    practice_name text,
+    practice_address text,
+    source_reference text,
+    collection_method text NOT NULL DEFAULT 'bulk_pdf',
+    collected_at timestamptz NOT NULL DEFAULT now(),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (source, listing_type, practitioner_key)
+);
+
 CREATE TABLE IF NOT EXISTS organizations (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     org_key text NOT NULL UNIQUE,
@@ -77,6 +96,8 @@ CREATE TABLE IF NOT EXISTS segment_members (
     last_seen_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (segment_id, organization_id, contact_id)
 );
+
+ALTER TABLE practitioners ADD COLUMN IF NOT EXISTS specialty text;
 
 CREATE INDEX IF NOT EXISTS organizations_city_idx ON organizations (city);
 CREATE INDEX IF NOT EXISTS organizations_sector_idx ON organizations (sector);

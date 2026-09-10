@@ -38,11 +38,11 @@ CPSA_LISTINGS: tuple[CpsaListing, ...] = (
 
 LISTING_BY_TYPE = {item.listing_type: item for item in CPSA_LISTINGS}
 
-# Alphabetical / specialists: people only (city is not a practice).
-# Non-specialists: org if an address is present.
+# Alphabetical: people only (city is not a practice).
+# Specialists / non-specialists: org if a street address is present.
 # Retired / obituaries: people only.
-# ProfCorp: organizations only.
-PROMOTE_ORGS = frozenset({"non_specialists"})
+# ProfCorp: organizations; unique name+initial matches become owner members.
+PROMOTE_ORGS = frozenset({"specialists", "non_specialists"})
 PROMOTE_CONTACTS = frozenset(
     {"alphabetical", "specialists", "non_specialists", "retired", "obituaries"}
 )

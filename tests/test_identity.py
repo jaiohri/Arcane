@@ -1,4 +1,4 @@
-from pipeline.transform.identity import contact_key, organization_key
+from pipeline.transform.identity import contact_key, organization_key, practitioner_key
 
 
 def test_org_key_uses_source_id_when_present():
@@ -52,3 +52,42 @@ def test_contact_key_falls_back_to_name_and_org():
         org_key="org:riverbend",
     )
     assert key == "name:jane doe|cpsa|org:riverbend"
+
+
+def test_contact_key_falls_back_to_name_and_city_without_org():
+    key = contact_key(
+        college="CPSA",
+        license_number=None,
+        full_name="Aadland, Hilary",
+        city="Calgary",
+    )
+    assert key == "name:aadland, hilary|cpsa|calgary"
+
+
+def test_practitioner_key_prefers_license_number():
+    assert (
+        practitioner_key(
+            listing_type="alphabetical",
+            license_number="12345",
+            full_name="Aadland, Hilary",
+            city="Calgary",
+        )
+        == "lic:12345"
+    )
+
+
+def test_practitioner_key_uses_listing_name_and_city():
+    a = practitioner_key(
+        listing_type="alphabetical",
+        license_number=None,
+        full_name="Aadland, Hilary",
+        city="Calgary",
+    )
+    b = practitioner_key(
+        listing_type="alphabetical",
+        license_number=None,
+        full_name="Aadland,  Hilary",
+        city="calgary",
+    )
+    assert a == b
+    assert a.startswith("name:alphabetical|")

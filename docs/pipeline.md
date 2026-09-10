@@ -1,6 +1,6 @@
 # Leads prospecting pipeline
 
-Standalone ETL that builds sector-specific lead lists for a wealth and retirement advisory use case. The first live segment is Alberta medical and dental practice owners, for outreach about group RRSPs and group health and dental plans.
+Standalone ETL that builds sector-specific lead lists for a wealth and retirement advisory use case. The first live segment is Alberta medical practice owners; dental is configured but still gated. The pitch is group RRSPs and group health and dental plans.
 
 This document is the design contract. Implementation should follow it; deviations belong here first.
 
@@ -18,20 +18,22 @@ The pipeline does three things:
 
 It does **not** send email, enrich contacts, or live inside HeadStart. Presentation for the pilot is a BI tool on Postgres.
 
+**Where the code is today:** CPSA live PDF extract, transform (including specialist-address promotion and conservative ProfCorp owner matching), and load into local Postgres all run for `alberta-medical-benefits`. Owner is a **proxy**, not a CPSA field. Dental extract stays gated. This file must match that behavior; do not leave promotion, scoring, or load rules only in comments.
+
 ---
 
 ## 2. Scope
 
 ### In scope (current build)
 
-- Named segments: `alberta-medical-benefits`, `alberta-dental-benefits`
-- Sources: CPSA physician directory; CDSA / Alberta Dental Association dentist directories
+- Named segments: `alberta-medical-benefits` (live extract enabled), `alberta-dental-benefits` (ToS still `unchecked`)
+- Sources: CPSA Medical Directory PDFs; CDSA / Alberta Dental Association dentist directories (fixtures empty until a later task)
 - Target: practice owners and equivalent decision makers, roughly 5–50 employees
 - Titles to isolate when present: Owner, Practice Owner, Founder, Managing Partner, combined with Physician, MD, Dentist, DDS, DMD
 - Industries: Medical Practices, Dentists, Hospital and Health Care
 - Fit scoring from signals that actually exist in the landed data
 - Postgres tables for organizations, contacts, and segment membership
-- Local or GitHub Actions extraction against a free-tier managed Postgres
+- Local extract and load against local Supabase in this repo (hosted Postgres is still an option)
 
 ### Explicitly out of scope until unblocked
 
@@ -159,8 +161,8 @@ industries:
   - Hospital and Health Care
 source:
   adapter: cpsa
-  tos_status: unchecked   # unchecked | allowed | prohibited
-  tos_notes: ""
+  tos_status: allowed   # unchecked | allowed | prohibited
+  tos_notes: "CPSA Medical Directory PDFs approved for live bulk_pdf extract."
 target:
   headcount_min: 5
   headcount_max: 50
@@ -173,7 +175,7 @@ target:
     - Physician
     - MD
 extract:
-  enabled: false           # stay false until tos_status is allowed
+  enabled: true
   rate_limit_rps: 0.2
 score:
   version: 1
@@ -203,9 +205,17 @@ CPSA does not offer an API or bulk database export. The live adapter downloads t
 | `obituaries` | `Obituaries Listing.pdf` | Person | `deceased` |
 | `professional_corporations` | `ProfCorp Listing.pdf` | Organization (corporation legal name only) | n/a |
 
-A symbols-and-abbreviations key is parsed once and hardcoded in the repo. It is not re-fetched on each run.
+A symbols-and-abbreviations key is parsed once and hardcoded in `pipeline/extract/cpsa_symbols.py`. It is not re-fetched on each run.
+
+Live CPSA PDFs are landscape and **multi-column**. Default left-to-right text extraction glues two people onto one line. Extract uses word x-positions (`pipeline/extract/cpsa_pdf.py`) so each column is read top-to-bottom. Transform prefers that PDF path when the file is a directory-sized landscape PDF and rewrites the inspectable `.txt` next to it. Fixture PDFs stay portrait and are parsed from text.
 
 Phone numbers that appear in the PDFs stay in the raw text landing. They are **not** copied onto `contacts.phone`.
+
+Specialty:
+
+- Alphabetical: the SPECIALTY column. Known codes expand (`PSY` → `Psychiatry`); unknown codes stay as printed.
+- Specialists: the section header above the names (`Adolescent Medicine`, `Family Medicine`, …). Phrases are stored as-is, not tokenized as codes.
+- Retired / obituaries / ProfCorp: no specialty in the source.
 
 Properties of these sources:
 
@@ -217,10 +227,10 @@ Properties of these sources:
 
 **Legal gate:** treat each registry as a separate ToS review. Do not hit the network against a source whose `tos_status` is `unchecked` or `prohibited`.
 
-Until that review is done, extract has two allowed modes:
+- **CPSA:** `tos_status: allowed`, `extract.enabled: true`. Product owner confirmed the Medical Directory PDF terms and listings-page review; live `bulk_pdf` extract is approved for this pipeline. CDSA is not covered by that decision.
+- **CDSA:** still `unchecked` / extract disabled. No search-tool scraper.
 
-1. **Fixture mode** — load checked-in sample files under `pipeline/fixtures/` so transform, scoring, and load can be built and tested.
-2. **Manual drop mode** — an operator places exported files into `data/raw/{segment}/{run_id}/` and the job starts at transform.
+Fixture mode and manual drop remain available for tests and for any segment that is still gated.
 
 ### 6.2 Secondary: Apollo.io (blocked)
 
@@ -247,14 +257,21 @@ College rows are **people at places**, except CPSA Professional Corporations, wh
 | Contact | A licensed practitioner | "Hilary Aadland, MD" |
 | Segment member | Contact at an organization, produced by a named segment | Only when a real practice org exists |
 
-CPSA promotion rules (do not fuzzy-match ProfCorp names to people in this version):
+CPSA promotion rules (owner is a **proxy**, never a registry field):
 
 | Listing | `practitioners` | `contacts` | `organizations` | `segment_members` |
 | --- | --- | --- | --- | --- |
-| Alphabetical / Specialists | yes, status `active` | yes | no (city is not a practice) | no |
-| Non-Specialists | yes | yes | yes only if a practice/address is present | only with that org |
+| Alphabetical | yes, status `active` | yes | no (city is not a practice) | no |
+| Specialists | yes, status `active` | yes | yes if a street address with a digit is present | yes, at that address |
+| Non-Specialists | yes | yes | yes only if a usable street address is present | only with that org |
 | Retired / Obituaries | yes, status `retired` / `deceased` | yes | no | no |
-| ProfCorp | no person row | no | yes, corp name as org | no |
+| ProfCorp | no person row | no | yes, corp name as org | yes only when a unique person match exists |
+
+A usable street address has a digit and is not a junk token (`0`, `-`, `n/a`).
+
+**ProfCorp → person:** strip `Professional Corporation` / `Medical Professional Corporation`. Parse remaining `A. Lastname`, `A & R Lastname`, or `A. Last & B. Other`. Clinic-style names (`Clinic`, `Centre`, `Hospital`, `Family`, …) are left unmatched. Attach a person only when **last name + first initial is unique among active licensees**. Ambiguous names (many `A. Ahmed`s) stay unmatched. A matched contact gets `title = Owner` for scoring. This is conservative unique-key matching, not fuzzy string similarity.
+
+The same physician may appear on two memberships: their specialist street address, and their professional corporation. That is intended.
 
 ### Identity
 
@@ -270,21 +287,32 @@ CPSA promotion rules (do not fuzzy-match ProfCorp names to people in this versio
 
 **Contact key** (in order):
 
-1. `(college, license_number)` — stable across runs
-2. Normalized `(full_name, college, organization_key)` when an org exists
-3. Normalized `(full_name, college, city)` when the person has no practice org
+1. `(college, license_number)` — stable across runs when the listing provides a number
+2. Normalized `(full_name, college, city)` — one contact per person, even when they sit at more than one org
+
+Do not put `organization_key` into the contact identity. Transform never passes `org_key` into `contact_key()`. A practitioner at two practices is **one contact, two memberships**.
 
 Unique practitioners are `(source, listing_type, practitioner_key)`, so the same physician may appear once per listing. Re-runs upsert; they must not duplicate because of PDF row order.
 
-A practitioner at two clinics becomes **one contact, two memberships** (or two org links). Do not duplicate the person. A clinic with several dentists is **one organization, many contacts**. Prefer ranking the owner / managing partner as the primary contact for the list; keep other practitioners as secondary members so the org is not lost if title is missing.
+A clinic with several physicians is **one organization, many contacts**. Prefer ranking a unique ProfCorp match as `Owner` / primary; keep other practitioners as secondary members so the org is not lost if title is missing.
 
-Hospital departments: keep them as organizations, but score them down. The owner is rarely the personal buyer above ~50 staff, and a hospital is the wrong buyer for this pitch.
+**Practice type** (from address/name tokens and co-located count):
+
+| `practice_type` | When |
+| --- | --- |
+| `hospital` | Hospital / university / named campus tokens in name or address, **or** `licensee_count >= 50` |
+| `solo` | One resolved licensee at the org |
+| `group` | 2–49 licensees |
+| `unknown` | Org with no resolved people (unmatched ProfCorp) |
+
+Hospital rows stay in the table and take the score penalty. They are not dropped at extract. Street abbreviations (`Street`/`St`, `Northwest`/`NW`) are normalized on the organization key so obvious duplicates collapse.
 
 ### Registry-only limitation (accepted)
 
-CPSA/CDSA will usually **not** give title = Owner, headcount, or founded year. The pipeline must still produce a useful list:
+CPSA/CDSA will usually **not** give title = Owner, headcount, or founded year. The pipeline still produces a usable **proxy** list:
 
 - Default title to the credential (`Physician`, `Dentist`) when the source has no owner flag
+- Set title to `Owner` only when a unique ProfCorp name match exists
 - Use **co-located licensee count** at the same organization key as a headcount proxy
 - Do not invent emails or phones; leave them null until enrichment exists. CPSA PDF phone columns stay in raw text only.
 
@@ -309,6 +337,7 @@ CPSA landing / staging grain. One row per person × listing. ProfCorp does not w
 | `full_name` | text | |
 | `profession` | text | `physician` for all CPSA rows |
 | `licence_status` | text | `active` \| `retired` \| `deceased` \| listing codes |
+| `specialty` | text null | Alphabetical codes (expanded when known); specialists section title |
 | `practice_name` | text null | When the listing provides one |
 | `practice_address` | text null | Unstructured address when present |
 | `source_reference` | text null | Registration number if present |
@@ -421,14 +450,16 @@ Transform is the only place business logic lives. Extract does not score. Load d
 
 Pipeline:
 
-1. Read raw files for `run_id` (CPSA: `{listing}.txt`, or `{listing}.pdf` if text is missing)
+1. Read raw files for `run_id`. If a landscape CPSA directory PDF is present, extract rows by column and refresh `{listing}.txt`. Otherwise parse existing text (fixtures).
 2. Parse each listing with its own layout parser; a failure on one listing must not block the others
 3. Map to `practitioners` plus interned people / ProfCorp orgs
-4. Resolve identity (upsert keys)
-5. Compute `licensee_count` and `practice_type` per organization that exists
-6. Score each candidate membership (only contact × org pairs)
-7. Mark `is_primary_contact`
-8. Emit load batches
+4. Promote specialist and non-specialist street addresses to organizations; keep alphabetical city-only rows as people
+5. Resolve identity (upsert keys). Contact grain is person (`name + college + city`), not person×org
+6. Match unique ProfCorp names to active physicians; those memberships use title `Owner`
+7. Compute `licensee_count` and `practice_type` per organization
+8. Score each candidate membership (only contact × org pairs)
+9. Mark `is_primary_contact`
+10. Emit load batches
 
 ### 9.1 Score version 1 (registry-only)
 
@@ -452,7 +483,7 @@ Score is 0–100. Missing Apollo firmographics are **not** treated as zeros that
 | 9–15 | Still plausible owner-operated | 22 |
 | 16+ | Likely past personal-owner decision | 8 |
 
-Hospitals ignore the band and take the practice-type penalty instead.
+Hospitals ignore the size band and take **0** on practice-type and size (remaining points are market + partial title + credential). `licensee_count >= 50` is classified as `hospital` even when the address line never says "hospital" (campus buildings such as Alberta Children's / Foothills).
 
 **Primary contact:** among members of an organization in a segment, the highest title rank wins; tie-break license status (active over former), then name. The advisor list default view is `is_primary_contact = true`. Other members remain in the table for transparency.
 
@@ -516,7 +547,7 @@ Phases: `extract` | `transform` | `load` | `full`.
 data/raw/{segment_id}/{run_id}/
   manifest.json
   pages/{listing_type}.pdf
-  pages/{listing_type}.txt    # pdfplumber extract; inspectable after transform
+  pages/{listing_type}.txt    # column-aware extract for live PDFs; inspectable after transform
   responses/...               # unused for CPSA PDFs
 ```
 
@@ -526,29 +557,38 @@ data/raw/{segment_id}/{run_id}/
 
 ### 10.3 Source adapters
 
-Each adapter implements:
+Each adapter is a named college with its own ToS field. CPSA writes PDFs (and a first-pass `.txt`) under `pages/`. Parsing lives in **transform**, not on the adapter.
 
 ```text
 name: str
-tos_status from segment config
-iter_records(config, run_dir) -> iterator of raw payloads written to disk
-parse(raw_payload) -> source-native dict
+college: str
+extract_to_run_dir(config, run_dir) -> ExtractResult
+iter_records(...)  # summary payload after files are on disk
 ```
 
-No shared HTML scraper framework that is then pointed at a new college by URL only. Every college is a named adapter with its own ToS field.
+`parse()` on the adapter is unused. CDSA remains a gated stub. No shared HTML scraper pointed at a new college by URL only.
 
 ### 10.4 Load semantics
 
-- Upsert `practitioners` on `(source, listing_type, practitioner_key)`
-- Upsert organizations on `org_key`
-- Upsert contacts on `contact_key`
-- Upsert `segment_members` on `(segment_id, organization_id, contact_id)` only when both sides exist
-- Refresh `fit_score`, `score_breakdown`, `last_seen_at` on each successful transform
-- Do not delete members that disappeared from a run in v1; keep `last_seen_at` so a later job can mark inactive. Hard delete is a later policy.
+CPSA load is **replace, then insert**, so a parser fix does not leave glued names:
+
+1. Delete `segment_members` for this `segment_id`
+2. Delete `contacts` where `license_college` matches the adapter college (`CPSA`)
+3. Delete `organizations` where `source_system` matches the adapter (`cpsa`)
+4. Delete `practitioners` where `source` matches the adapter
+5. Insert the new batch. Inserts still use `ON CONFLICT` keys below for in-batch collisions.
+
+- Practitioners: `(source, listing_type, practitioner_key)`
+- Organizations: `org_key`
+- Contacts: `contact_key`
+- `segment_members`: `(segment_id, organization_id, contact_id)` only when both sides exist
+- Refresh `fit_score`, `score_breakdown`, `last_seen_at` on each successful load
+
+This wipe is source-wide for CPSA, not “members that vanished stay forever.” Dental rows are untouched because they use a different `source` / `license_college`.
 
 ### 10.5 Idempotency
 
-Re-running transform+load for the same segment with new scores must be safe. `etl_runs` is append-only. Members are upserted, not duplicated.
+Re-running transform+load for the same segment with new scores must be safe. `etl_runs` is append-only (same `run_id` updates the run row). Source rows for CPSA are replaced each load, then inserted, so vanished keys (bad parses) do not linger.
 
 ---
 
@@ -572,7 +612,7 @@ Do not schedule enrichment. Do not enrich the whole table.
 
 Not a custom app.
 
-Connect Metabase or Retool (or equivalent) to Postgres with a read-only role.
+Inspect locally in Supabase Studio (http://127.0.0.1:54323 after `npx supabase start`). For the pilot advisor list, connect Metabase or Retool (or equivalent) to Postgres with a read-only role.
 
 Default saved question / app:
 
@@ -591,6 +631,7 @@ That is the advisor-facing lead list for the scoping phase.
 
 ```text
 docs/pipeline.md                 # this file
+README.md
 pipeline/
   cli.py
   configs/segments/
@@ -602,17 +643,22 @@ pipeline/
       base.py
       cpsa.py                    # live PDF download when segment extract is allowed
       cdsa.py                    # gated stub; no fixtures yet
-    cpsa_listings.py
+    cpsa_listings.py             # six PDF URLs; promotion sets
     cpsa_symbols.py
+    cpsa_pdf.py                  # column-aware word extract for landscape PDFs
+    pdf.py                       # default pdfplumber text (fixtures / fallback)
+    result.py
   transform/
+    __init__.py                  # intern, promote, ProfCorp attach, score
     parse.py
-    cpsa.py                      # per-listing PDF/text parsers
+    cpsa.py                      # per-listing parsers
+    profcorp.py                  # unique last-name + first-initial owner match
     identity.py
     score.py
     normalize.py
   load/
     schema.sql
-    upsert.py
+    upsert.py                    # replace-then-insert for CPSA
   enrichment/
     stub.py                      # always blocked in v1
   fixtures/
@@ -623,6 +669,8 @@ tests/
   test_score.py
   test_load.py
   test_cpsa_parse.py
+  test_profcorp.py
+supabase/                        # local Postgres via `npx supabase start`
 data/                            # gitignored raw landing
 ```
 
@@ -637,10 +685,10 @@ Python package, Postgres schema in SQL, segment definitions in YAML. No applicat
 | Piece | Choice |
 | --- | --- |
 | Compute | Local machine, or a scheduled GitHub Action (free) |
-| Database | Free-tier managed Postgres (Neon or Supabase) |
+| Database | Local Supabase in this repo (`npx supabase start`, `DATABASE_URL` on port 54322). Managed Neon/Supabase remains an option |
 | Secrets | GitHub Actions secrets / local `.env` (not committed) |
-| Schedule | Manual, then daily/weekly Action once extract is legally enabled |
-| Region | Neon/Supabase project in a Canadian region if offered; otherwise accept scoping exception and move at production |
+| Schedule | Manual. CPSA extract is legally enabled; a daily Action is optional, not required |
+| Region | Local scoping; Canadian region when a hosted project is used |
 
 ### Later (ongoing pipeline)
 
@@ -668,25 +716,28 @@ The runner enforces:
 
 Human work that the runner cannot do, but the project must not skip:
 
-- Read CPSA, CDSA, and ADA terms before flipping `tos_status`
+- Read CDSA and ADA terms before flipping `tos_status` on dental (CPSA PDF extract was approved 2026-09-10)
 - Confirm the pilot advisor’s licensing before lists become a pitch
 - Define CASL consent before any message is sent from these lists
 
 ---
 
-## 16. Implementation order
+## 16. Implementation status
 
-Build in this order so scoring and schema are real before any network adapter exists.
+Done for `alberta-medical-benefits`:
 
-1. Postgres schema + local/Neon connection
-2. Segment YAML for the two Alberta segments, extract disabled
+1. Postgres schema; local Supabase in this repo
+2. Segment YAML; CPSA `tos_status: allowed` and `extract.enabled: true`
 3. Fixtures (small, synthetic CPSA PDF/text slices for all six listings)
-4. Transform: per-listing parse, practitioners staging, identity, licensee_count, score v1
-5. Load upserts + `etl_runs`
-6. Metabase/Retool read-only view on `segment_members`
-7. Tests for identity collisions, size bands, hospital penalty, gated extract, listing isolation
-8. **CPSA ToS review** — still required before `extract.enabled: true`
-9. GitHub Action schedule (optional); CDSA still gated
+4. Transform: column-aware PDF parse, practitioners staging, specialist/non-specialist address promotion, identity, ProfCorp unique-initial match, `licensee_count`, score v1
+5. Load replace-then-insert + `etl_runs`
+6. Tests for identity, size bands, hospital penalty, ProfCorp matching, listing isolation, gated dental extract
+
+Still later:
+
+7. Saved BI question / Retool on `segment_members` (local Studio is enough to inspect today)
+8. Optional GitHub Action schedule for CPSA
+9. CDSA ToS review and dentist ingest
 10. Apollo / enrichment: only after a reseller agreement, as a separate change
 
 ---
@@ -697,17 +748,19 @@ Resolved by this document unless explicitly revisited:
 
 - Postgres not Mongo
 - Segment = extract unit, not a presentation filter
-- Org = practice location or CPSA professional corporation; contact = licensee; list = primary `segment_members`
-- CPSA ProfCorp is an organization listing; it is not fuzzy-matched to physicians in this version
-- CPSA `practitioners` is staging; city-only listings do not become organizations
+- Org = specialist/non-specialist street address **or** CPSA professional corporation; contact = licensee; list = `segment_members`
+- Alphabetical / retired / obituaries stay people-only (city is not a practice)
+- CPSA ProfCorp is always an organization. A person is attached only when last name + first initial is unique among active licensees. Clinic-style names and ambiguous initials stay unmatched. This is not fuzzy matching
+- Hospitals stay in the table and are down-scored. Tokens in name/address **or** `licensee_count >= 50` set `practice_type=hospital`
 - Score v1 uses licensee count as size proxy; does not require Apollo
+- CPSA load replaces prior CPSA rows for the segment/source, then inserts
 - Enrichment is on-demand and blocked
 - Pilot UI is BI, not a custom app
+- Scoping database in this repo is local Supabase
 
 Still open:
 
 - Which dentist directory is canonical (CDSA vs Alberta Dental Association), after ToS review
-- Whether hospital-employed physicians are excluded at extract time or only down-scored
-- Neon vs Supabase for scoping
+- Whether hospital-employed physicians should later be excluded at extract time (today they are only down-scored)
 - Whether `licensee_count` 1 (true solo) is kept in the loaded set or dropped in the medical/dental segments (presentation can hide them either way; dropping is an extract-policy change)
 - Product home (HeadStart vs standalone) after the pilot

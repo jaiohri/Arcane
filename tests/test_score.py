@@ -55,7 +55,33 @@ def test_registry_only_example_score():
     assert breakdown["inputs"]["title_rank"] == "credential_only"
 
 
-def test_hospital_penalty_ignores_size_band():
+def test_hospital_detected_from_address():
+    from pipeline.transform.normalize import detect_practice_type
+    from pipeline.models import InternedRecord
+
+    record = InternedRecord(
+        source_system="cpsa",
+        license_college="CPSA",
+        license_number=None,
+        full_name="Adam, Benjamin Alexander",
+        first_name="Benjamin Alexander",
+        last_name="Adam",
+        credentials="MD",
+        specialty="Anatomical Pathology",
+        title=None,
+        license_status="active",
+        practice_name="",
+        source_org_id=None,
+        address_line1="University of Alberta Hospital",
+        city="Edmonton",
+        province="AB",
+        postal_code="T6G 2J2",
+        country="CA",
+        practice_type_hint="clinic",
+    )
+    assert detect_practice_type(record, 1) == "hospital"
+    record.address_line1 = "28 Oki Drive Northwest"
+    assert detect_practice_type(record, 218) == "hospital"
     config = load_segment("alberta-medical-benefits")
     breakdown = score_membership(
         _record(practice_name="University of Alberta Hospital", title=None),

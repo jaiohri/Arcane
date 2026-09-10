@@ -37,8 +37,12 @@ SPECIALTY_ABBREVIATIONS = {
 def expand_specialty_codes(codes: str | None) -> str | None:
     if not codes:
         return None
-    parts = [part.strip() for part in codes.replace(",", " ").split() if part.strip()]
+    collapsed = " ".join(codes.split())
+    parts = [part.strip() for part in collapsed.replace(",", " ").split() if part.strip()]
     if not parts:
         return None
+    # Section headers are phrases ("Adolescent Medicine"). Only expand short codes.
+    if not all(part.isupper() or "&" in part for part in parts):
+        return collapsed
     expanded = [SPECIALTY_ABBREVIATIONS.get(part.upper(), part) for part in parts]
     return "; ".join(expanded)
