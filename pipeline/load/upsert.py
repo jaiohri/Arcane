@@ -7,7 +7,7 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 
 from pipeline.config import SegmentConfig
-from pipeline.models import Contact, Organization, SegmentMember, TransformBatch
+from pipeline.models import Contact, Organization, Practitioner, SegmentMember, TransformBatch
 from pipeline.paths import SCHEMA_PATH
 
 
@@ -131,7 +131,7 @@ def upsert_organization(conn: Connection, org: Organization) -> UUID:
     return row[0]
 
 
-def upsert_contact(conn: Connection, contact: Contact, organization_id: UUID) -> UUID:
+def upsert_contact(conn: Connection, contact: Contact, organization_id: UUID | None) -> UUID:
     row = conn.execute(
         """
         INSERT INTO contacts (
@@ -163,6 +163,46 @@ def upsert_contact(conn: Connection, contact: Contact, organization_id: UUID) ->
             contact.specialty,
             contact.license_number,
             contact.license_college,
+        ),
+    ).fetchone()
+    return row[0]
+
+
+def upsert_practitioner(conn: Connection, practitioner: Practitioner) -> UUID:
+    row = conn.execute(
+        """
+        INSERT INTO practitioners (
+            practitioner_key, source, listing_type, full_name, profession,
+            licence_status, specialty, practice_name, practice_address,
+            source_reference, collection_method, collected_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, now()))
+        ON CONFLICT (source, listing_type, practitioner_key) DO UPDATE SET
+            full_name = EXCLUDED.full_name,
+            profession = EXCLUDED.profession,
+            licence_status = EXCLUDED.licence_status,
+            specialty = EXCLUDED.specialty,
+            practice_name = EXCLUDED.practice_name,
+            practice_address = EXCLUDED.practice_address,
+            source_reference = EXCLUDED.source_reference,
+            collection_method = EXCLUDED.collection_method,
+            collected_at = EXCLUDED.collected_at,
+            updated_at = now()
+        RETURNING id
+        """,
+        (
+            practitioner.practitioner_key,
+            practitioner.source,
+            practitioner.listing_type,
+            practitioner.full_name,
+            practitioner.profession,
+            practitioner.licence_status,
+            practitioner.specialty,
+            practitioner.practice_name,
+            practitioner.practice_address,
+            practitioner.source_reference,
+            practitioner.collection_method,
+            practitioner.collected_at,
         ),
     ).fetchone()
     return row[0]
@@ -205,6 +245,28 @@ def upsert_member(
     )
 
 
+def replace_source_rows(conn: Connection, config: SegmentConfig) -> None:
+    """Drop prior rows for this source so a parser fix does not leave glued names."""
+    source = config.source.adapter
+    college = source.upper()
+    conn.execute(
+        "DELETE FROM segment_members WHERE segment_id = %s",
+        (config.segment_id,),
+    )
+    conn.execute(
+        "DELETE FROM contacts WHERE license_college = %s",
+        (college,),
+    )
+    conn.execute(
+        "DELETE FROM organizations WHERE source_system = %s",
+        (source,),
+    )
+    conn.execute(
+        "DELETE FROM practitioners WHERE source = %s",
+        (source,),
+    )
+
+
 def load_batch(
     conn: Connection,
     config: SegmentConfig,
@@ -213,6 +275,9 @@ def load_batch(
 ) -> dict[str, int]:
     apply_schema(conn)
     upsert_segment(conn, config)
+    replace_source_rows(conn, config)
+    for practitioner in batch.practitioners:
+        upsert_practitioner(conn, practitioner)
     org_ids: dict[str, UUID] = {}
     for org in batch.organizations:
         org_ids[org.org_key] = upsert_organization(conn, org)
@@ -220,7 +285,7 @@ def load_batch(
     contact_ids: dict[str, UUID] = {}
     contacts_by_key = {contact.contact_key: contact for contact in batch.contacts}
     for contact in batch.contacts:
-        org_id = org_ids[contact.display_org_key]
+        org_id = org_ids.get(contact.display_org_key) if contact.display_org_key else None
         contact_ids[contact.contact_key] = upsert_contact(conn, contact, org_id)
 
     for member in batch.members:
@@ -235,6 +300,7 @@ def load_batch(
 
     conn.commit()
     return {
+        "practitioners": len(batch.practitioners),
         "orgs": len(batch.organizations),
         "contacts": len(contacts_by_key),
         "members": len(batch.members),

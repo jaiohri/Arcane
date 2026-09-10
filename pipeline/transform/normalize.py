@@ -14,6 +14,19 @@ HOSPITAL_TOKENS = (
     "faculty of",
     "health sciences centre",
     "health sciences center",
+    "mccaig",
+    "youville",
+    "stollery",
+    "foothills medical",
+    "royal alexandra",
+    "peter lougheed",
+    "chinook regional",
+    "misericordia",
+    "grey nuns",
+    "rockyview",
+    "alberta children's",
+    "south health campus",
+    "medical examiner",
 )
 
 LOW_TITLE_TOKENS = ("associate", "resident", "student", "intern")
@@ -34,14 +47,33 @@ def word_set(value: str | None) -> set[str]:
 
 def detect_practice_type(record: InternedRecord, licensee_count: int) -> str:
     hint = (record.practice_type_hint or "").lower()
-    name = (record.practice_name or "").lower()
-    if hint == "hospital" or any(token in name for token in HOSPITAL_TOKENS):
+    hay = " ".join(
+        part
+        for part in (
+            record.practice_name,
+            record.address_line1,
+            record.city,
+        )
+        if part
+    ).lower()
+    if hint == "hospital" or any(token in hay for token in HOSPITAL_TOKENS):
+        return "hospital"
+    if licensee_count >= 50:
         return "hospital"
     if licensee_count <= 0:
         return "unknown"
     if licensee_count == 1:
         return "solo"
     return "group"
+
+
+def usable_practice_address(record: InternedRecord) -> bool:
+    address = (record.address_line1 or record.practice_name or "").strip()
+    if not address or address.lower() in {"0", "-", "n/a", "none"}:
+        return False
+    if not re.search(r"\d", address):
+        return False
+    return True
 
 
 def sector_for(profession: str) -> str:
