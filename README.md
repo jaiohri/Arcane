@@ -6,20 +6,35 @@ CPSA Medical Directory PDFs are the live source for `alberta-medical-benefits`. 
 
 ## Setup
 
+Each person runs this on their own machine. Downloaded PDFs (`data/`) and loaded tables are not in git.
+
+You need **Python 3.11+**, **Node** (`npx`), **git**, and **Docker Desktop running**. Local Postgres is Docker via the Supabase CLI, not a hosted supabase.com project.
+
 ```bash
+git clone git@github.com:jaiohri/Arcane.git
+cd Arcane
+# check out the branch you are reviewing, then:
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Set `DATABASE_URL` in `.env` for load. This repo’s local Postgres:
+`.env.example` already has `DATABASE_URL` for local Postgres. Then:
 
 ```bash
 npx supabase start
 ```
 
-Default URL is `postgresql://postgres:postgres@127.0.0.1:54322/postgres`. Studio: http://127.0.0.1:54323
+The first start pulls Docker images and can take a few minutes. After that:
+
+- Postgres: `postgresql://postgres:postgres@127.0.0.1:54322/postgres`
+- Studio (table browser): http://127.0.0.1:54323
+
+Studio is empty until you run **load**. `npx supabase stop` shuts the containers down.
+
+`pytest` does not need Docker. Load does.
 
 ## Run
 
