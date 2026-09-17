@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 
@@ -26,7 +27,32 @@ class InternedRecord:
     postal_code: str | None
     country: str
     practice_type_hint: str | None
+    listing_type: str | None = None
+    source_reference: str | None = None
+    collection_method: str | None = "bulk_pdf"
+    phone: str | None = None
+    fax: str | None = None
     raw_payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Practitioner:
+    practitioner_key: str
+    source: str
+    listing_type: str
+    full_name: str
+    profession: str
+    licence_status: str | None
+    specialty: str | None
+    practice_name: str | None
+    practice_address: str | None
+    city: str | None = None
+    postal_code: str | None = None
+    phone: str | None = None
+    fax: str | None = None
+    source_reference: str | None = None
+    collection_method: str = "bulk_pdf"
+    collected_at: datetime | None = None
 
 
 @dataclass
@@ -58,7 +84,9 @@ class Contact:
     license_number: str | None
     license_college: str
     license_status: str | None
-    display_org_key: str
+    phone: str | None = None
+    fax: str | None = None
+    display_org_key: str | None = None
 
 
 @dataclass
@@ -76,3 +104,5 @@ class TransformBatch:
     organizations: list[Organization]
     contacts: list[Contact]
     members: list[SegmentMember]
+    practitioners: list[Practitioner] = field(default_factory=list)
+    parse_errors: list[str] = field(default_factory=list)

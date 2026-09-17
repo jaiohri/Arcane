@@ -105,6 +105,9 @@ def run_command(args: argparse.Namespace) -> int:
         if "extract" in phases:
             try:
                 result = run_extract(config, run_dir, allow_fixtures=args.allow_fixtures)
+            except FileNotFoundError as exc:
+                print(exc, file=sys.stderr)
+                return 1
             except LegalGateError as exc:
                 existing = run_dir if raw_dir_has_payloads(run_dir) else None
                 if existing is None and args.run_id is None:
@@ -148,13 +151,15 @@ def run_command(args: argparse.Namespace) -> int:
             batch = run_transform(run_dir, config)
             row_counts.update(
                 {
+                    "practitioners": len(batch.practitioners),
                     "orgs": len(batch.organizations),
                     "contacts": len(batch.contacts),
                     "members": len(batch.members),
                 }
             )
             print(
-                f"transform succeeded: {row_counts.get('orgs')} orgs, "
+                f"transform succeeded: {row_counts.get('practitioners')} practitioners, "
+                f"{row_counts.get('orgs')} orgs, "
                 f"{row_counts.get('contacts')} contacts, {row_counts.get('members')} members"
             )
 

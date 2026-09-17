@@ -1,26 +1,17 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pipeline.config import SegmentConfig
 from pipeline.extract.adapters import get_adapter
 from pipeline.extract.adapters.base import LiveExtractNotImplementedError
+from pipeline.extract.result import ExtractResult
 
 
 class LegalGateError(RuntimeError):
     status = "skipped_legal_gate"
-
-
-@dataclass
-class ExtractResult:
-    run_dir: Path
-    status: str
-    used_fixtures: bool
-    file_count: int
-    message: str
 
 
 def raw_dir_has_payloads(run_dir: Path) -> bool:
@@ -35,18 +26,26 @@ def raw_dir_has_payloads(run_dir: Path) -> bool:
 
 def write_fixture_extract(config: SegmentConfig, run_dir: Path) -> ExtractResult:
     adapter = get_adapter(config.source.adapter)
-    payloads = adapter.load_fixture_payloads()
-    if not payloads:
+    source_dir = adapter.fixture_dir()
+    if not source_dir.exists():
         raise FileNotFoundError(
-            f"No fixtures under {adapter.fixture_dir()} for segment {config.segment_id}"
+            f"No fixtures under {source_dir} for segment {config.segment_id}"
         )
-    responses = run_dir / "responses"
-    responses.mkdir(parents=True, exist_ok=True)
     files: list[str] = []
-    for name, payload in payloads:
-        relative = f"responses/{name}"
-        (run_dir / relative).write_text(json.dumps(payload, indent=2) + "\n")
-        files.append(relative)
+    pages = run_dir / "pages"
+    pages.mkdir(parents=True, exist_ok=True)
+    for path in sorted(source_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in {".txt", ".pdf"}:
+            continue
+        target = pages / path.name
+        target.write_bytes(path.read_bytes())
+        files.append(f"pages/{path.name}")
+    if not files:
+        raise FileNotFoundError(
+            f"No fixtures under {source_dir} for segment {config.segment_id}"
+        )
     _write_manifest(
         run_dir,
         config=config,
@@ -69,6 +68,7 @@ def run_extract(
     *,
     allow_fixtures: bool,
 ) -> ExtractResult:
+    adapter = get_adapter(config.source.adapter)
     if not config.extract_allowed():
         if allow_fixtures:
             return write_fixture_extract(config, run_dir)
@@ -78,11 +78,12 @@ def run_extract(
             f"extract.enabled={config.extract.enabled}. "
             "Pass --allow-fixtures or drop files into data/raw."
         )
-    adapter = get_adapter(config.source.adapter)
-    raise LiveExtractNotImplementedError(
-        f"Live extract for adapter {adapter.name!r} is not implemented yet. "
-        "Keep extract.enabled false until ToS review, then add the adapter."
-    )
+    extract_live = getattr(adapter, "extract_to_run_dir", None)
+    if extract_live is None:
+        raise LiveExtractNotImplementedError(
+            f"Live extract for adapter {adapter.name!r} is not implemented yet."
+        )
+    return extract_live(config, run_dir)
 
 
 def _write_manifest(
