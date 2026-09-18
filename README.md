@@ -11,7 +11,7 @@ Each person runs this on their own machine. Downloaded PDFs (`data/`) and loaded
 You need **Python 3.11+**, **Node** (`npx`), **git**, and **Docker Desktop running**. Local Postgres is Docker via the Supabase CLI, not a hosted supabase.com project.
 
 ```bash
-git clone git@github.com:jaiohri/Arcane.git
+git clone git@github.com:Averon-Consulting/Arcane.git
 cd Arcane
 # check out the branch you are reviewing, then:
 
